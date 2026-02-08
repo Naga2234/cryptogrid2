@@ -568,8 +568,20 @@ function cnap_get_news() {
                 update_post_meta($post_id, 'cnap_source', $source['name']);
                 update_post_meta($post_id, 'cnap_photos_count', $full['photos_count']);
 
-                cnap_set_thumb($post_id, $full['featured_image']);
-                if (empty($full['featured_image']) && !has_post_thumbnail($post_id)) {
+                $thumb_set = cnap_set_thumb($post_id, $full['featured_image']);
+                if (!$thumb_set && !empty($full['image_urls'])) {
+                    foreach ($full['image_urls'] as $image_url) {
+                        if ($image_url === $full['featured_image']) {
+                            continue;
+                        }
+                        $thumb_set = cnap_set_thumb($post_id, $image_url);
+                        if ($thumb_set) {
+                            $full['featured_image'] = $image_url;
+                            break;
+                        }
+                    }
+                }
+                if (!$thumb_set && !has_post_thumbnail($post_id)) {
                     $fallback_set = cnap_set_fallback_thumb($post_id);
                     if ($fallback_set && $full['photos_count'] == 0) {
                         update_post_meta($post_id, 'cnap_photos_count', 1);
@@ -603,7 +615,12 @@ function cnap_deep_parse_v35($url, $stopwords) {
         return $cached;
     }
 
-    $result = array('content' => '', 'featured_image' => '', 'photos_count' => 0);
+    $result = array(
+        'content' => '',
+        'featured_image' => '',
+        'photos_count' => 0,
+        'image_urls' => array()
+    );
 
     $response = wp_remote_get($url, array('timeout' => 30, 'user-agent' => 'Mozilla/5.0'));
     if (is_wp_error($response)) {
@@ -723,6 +740,9 @@ function cnap_deep_parse_v35($url, $stopwords) {
 
     $result['featured_image'] = $all_images[0]['src'];
     $result['photos_count'] = count($all_images);
+    $result['image_urls'] = array_values(array_map(function($img) {
+        return $img['src'];
+    }, $all_images));
 
     $text_content = $content_node->textContent;
 
@@ -896,7 +916,7 @@ function cnap_emphasize_first_paragraph($content_html) {
 
 function cnap_set_thumb($post_id, $url) {
     if (empty($url)) {
-        return;
+        return false;
     }
 
     require_once(ABSPATH . 'wp-admin/includes/media.php');
@@ -904,14 +924,19 @@ function cnap_set_thumb($post_id, $url) {
     require_once(ABSPATH . 'wp-admin/includes/image.php');
 
     $tmp = download_url($url, 20);
-    if (is_wp_error($tmp)) return;
+    if (is_wp_error($tmp)) {
+        return false;
+    }
 
     $file = array('name' => basename($url), 'tmp_name' => $tmp);
     $id = media_handle_sideload($file, $post_id);
 
-    if (!is_wp_error($id)) {
-        set_post_thumbnail($post_id, $id);
+    if (is_wp_error($id)) {
+        return false;
     }
+
+    set_post_thumbnail($post_id, $id);
+    return true;
 }
 
 function cnap_set_fallback_thumb($post_id) {
